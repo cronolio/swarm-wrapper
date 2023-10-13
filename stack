@@ -1,0 +1,131 @@
+#!/bin/bash
+
+#docker stack rm test
+
+#docker stack deploy -c test.yml test
+
+#stack_name=test
+
+check_status(){
+stack_name="$1"
+while true; do
+  service_ids=$(docker stack services -q "$stack_name")
+  for service_id in ${service_ids//$'\n'/ }; do
+    service_name=$(docker service inspect --format '{{.Spec.Name}}' "$service_id")
+    count=0
+    while read -r line; do
+      let count="$count"+1
+      if [[ "$count" = '1' ]]; then
+        DS="$line"
+      elif [[ "$count" = '2' ]]; then
+        CS="$line"
+      else
+        ER="$line"
+      fi
+
+    done < <(docker service ps --no-trunc --format "{{.DesiredState}}\n{{.CurrentState}}\n{{.Error}}" "$service_id")
+
+    echo -e "SN\t\tDS\t\tCS\t\tER"
+    echo -e "$service_name\t\t$DS\t\t$CS\t\t$ER"
+
+    if [[ -n "$ER" ]]; then
+      exit 1
+    fi
+  done
+
+  sleep 1
+done
+
+}
+
+run_up(){
+stack_name="$1"
+
+docker stack deploy -c "$compose_file_path" "$stack_name"
+
+check_status "$stack_name"
+}
+
+run_down(){
+stack_name="$1"
+docker stack rm "$stack_name"
+}
+
+run_status(){
+stack_name="$1"
+docker stack ps "$stack_name"
+
+}
+
+show_help(){
+cat << 'EOF'
+docker swarm wrapper
+
+stack [command] [options] stack_name
+
+command:
+    up            - see 'docker stack deploy'
+        options:  -c <path to compose file>
+    status        - see 'docker stack ps'
+    down          - see 'docker stack rm'
+    help          - show this help
+EOF
+}
+
+if [ $# -gt 0 ]; then
+  regex_option="(^-).*?"
+	for i in "$@"; do
+    if [[ "$i" =~ $regex_option ]]; then
+      if [[ "$i" = '-c' ]]; then
+        compose_file=2
+      fi
+    else
+      if [[ "$i" = 'up' ]]; then
+        need_run_up=true
+      elif [[ "$i" = 'status' ]]; then
+        need_run_status=true
+      elif [[ "$i" = 'down' ]]; then
+        need_run_down=true
+      elif [[ "$i" = 'help' ]]; then
+        show_help
+        exit 0
+      else
+        argx="$i"
+      fi
+    fi
+
+    if [[ -n "$compose_file" ]]; then
+      if [[ "$compose_file" = '1' ]]; then
+        compose_file_path="$i"
+        unset compose_file
+      fi
+      let compose_file="$compose_file"-1
+    fi
+  done
+else
+  show_help
+  exit 1
+fi
+
+#echo up $need_run_up
+#echo status $need_run_status
+#echo down $need_run_down
+#echo compose $compose_file_path
+#echo argx "$argx"
+
+if [[ -n "$need_run_up" ]]; then
+  if [[ -z "$compose_file_path" ]]; then
+      echo 'required compose file'
+      exit 1
+  fi
+
+  run_up "$argx" || { echo "run_up failed" && exit 1; }
+fi
+
+if [[ -n "$need_run_status" ]]; then
+  run_status "$argx" || { echo "run_status failed" && exit 1; }
+fi
+
+if [[ -n "$need_run_down" ]]; then
+  run_down "$argx" || { echo "run_down failed" && exit 1; }
+fi
